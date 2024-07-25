@@ -30,6 +30,9 @@ import numpy as np
 import os
 from datetime import datetime
 
+from scipy.optimize import linear_sum_assignment
+from matcher import HungarianMatcher
+
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
@@ -457,9 +460,9 @@ def main(args):
     #         if n.startswith('encoder'):
     #             p.requires_grad = False
                 
-    #     # for name, param in model.named_parameters():
-    #     #     if any(substr in name for substr in [args.open_layer, 'input_adapters', 'output_adapters', 'bias']):
-    #     #         param.requires_grad = True
+    #     for name, param in model.named_parameters():
+    #         if any(substr in name for substr in ['input_adapters', 'output_adapters', 'bias']):
+    #             param.requires_grad = True
                 
     # check frozen well 
     for n,p in model.named_parameters():
@@ -526,9 +529,10 @@ def main(args):
         fcl = FocalLoss(ignore_index=255)
         fc_loss = fcl(real_preds,target)
         mse = torch.nn.MSELoss()
-        target = label_to_one_hot_label(target ,args.num_classes , target.device )
-        mse_loss = mse(real_preds, target)
-        loss_prompt_seg = mse(prompt_seg,target)
+        target_1 = label_to_one_hot_label(target ,args.num_classes , target.device )
+        target_2 = label_to_one_hot_label(target ,100 , target.device )
+        mse_loss = mse(real_preds, target_1)
+        loss_prompt_seg = mse(prompt_seg,target_2)
         
         loss = (fc_loss * 20 + mse_loss) + (150*loss_prompt_seg) 
         # loss = loss_prompt_seg
@@ -738,7 +742,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, data_loa
 
 @torch.no_grad()
 def evaluate(model, criterion, data_loader, device, epoch, in_domains, num_classes, dataset_name,
-             log_images=True, mode='val', fp16=True, return_all_layers=False):
+             log_images=False, mode='val', fp16=True, return_all_layers=False):
     # Switch to evaluation mode
     model.eval()
 
@@ -784,7 +788,25 @@ def evaluate(model, criterion, data_loader, device, epoch, in_domains, num_class
             preds = model(input_dict, return_all_layers=return_all_layers)
             seg_pred, seg_gt  = preds['semseg'], tasks_dict['semseg'] 
             loss = criterion(seg_pred, seg_gt)
+            
+        seg_gt_one_hot = label_to_one_hot_label(seg_gt ,100 , seg_gt.device )
+        matcher = HungarianMatcher(cost_mask=1, cost_dice=1)  # Matcher 초기화
+        # 예측값과 실제값 간의 매칭 수행
+        outputs = {"pred_masks": seg_pred[0]}
+        targets = [{"masks": seg_gt_one_hot[i]} for i in range(seg_gt_one_hot.shape[0])]
+        matched_indices = matcher.memory_efficient_forward(outputs, targets)
+        
+        for batch_idx, (pred_idx, gt_idx) in enumerate(matched_indices):
+            seg_pred_matched = seg_pred[0][batch_idx, pred_idx]
+            seg_gt_matched = seg_gt[batch_idx]
 
+            # 예측된 클래스 인덱스와 실제 클래스 인덱스를 비교
+            seg_pred_argmax = seg_pred_matched.argmax(dim=0)
+            seg_gt_argmax = seg_gt[batch_idx]  # 원핫 인코딩 전의 실제 클래스 인덱스
+
+            seg_preds.extend(list(seg_pred_argmax.cpu().numpy()))
+            seg_gts.extend(list(seg_gt_argmax.cpu().numpy()))
+                    
         # prompts = seg_pred[2].detach().cpu()
         # print(prompts.shape)
         # attention_mean = prompts.mean(dim=1)
@@ -809,10 +831,13 @@ def evaluate(model, criterion, data_loader, device, epoch, in_domains, num_class
         # plt.savefig(filename)
         
         loss_value = loss.item()
-        # If there is void, exclude it from the preds and take second highest class
-        seg_pred_argmax = seg_pred[0][:, :num_classes].argmax(dim=1)
-        seg_preds.extend(list(seg_pred_argmax.cpu().numpy()))
-        seg_gts.extend(list(seg_gt.cpu().numpy()))
+        # # If there is void, exclude it from the preds and take second highest class
+        # seg_pred_argmax = seg_pred[0][:, :num_classes].argmax(dim=1)
+
+        # seg_preds.extend(list(seg_pred_argmax.cpu().numpy()))
+        # seg_gts.extend(list(seg_gt.cpu().numpy()))
+        
+        
         #attn_heat_map = (seg_pred[2]).mean(dim=1)
         #print(attn_heat_map.shape)
         #save_average_attention_maps(attn_heat_map, output_dir="/root/workspace/attn_map_p_to_im")

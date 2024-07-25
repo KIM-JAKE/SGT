@@ -1157,7 +1157,7 @@ class ConvNeXtAdapter(nn.Module):
         self.norm = nn.LayerNorm(768)
         self.norm3 = nn.LayerNorm(768)
         self.norm2 = nn.LayerNorm([144,144])
-        self.batch_norm = nn.BatchNorm2d(self.num_classes)
+        self.batch_norm = nn.BatchNorm2d(self.task_specific_prompt_length)
         #blocks
         self.blocks = nn.Sequential(*[
             ConvNeXtBlock(dim=self.class_dim )
@@ -1235,7 +1235,7 @@ class ConvNeXtAdapter(nn.Module):
         im_to_p  = origin_prompts_1 + im_to_p
         prompt_seg = (p_to_im @ im_to_p.transpose(1,2)) 
         prompt_seg = rearrange(prompt_seg ,"b (h w) c -> b c h w" , h = N_H , w = N_W)
-        prompt_seg = self.final_prompt(prompt_seg)
+        # prompt_seg = self.final_prompt(prompt_seg)
         prompt_seg = self.batch_norm(prompt_seg)
         prompt_seg = F.interpolate(prompt_seg, size=(H,W) , mode= self.interpolate_mode)
         
